@@ -1,0 +1,99 @@
+name: Bug report
+description: Something behaves differently than documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you paste anything:** `doctor` output names your connections and can
+        echo a credential that was misconfigured into the wrong place. Read it before
+        you paste it. If you believe you have found a security issue, do not open an
+        issue at all — follow [SECURITY.md](../blob/main/SECURITY.md) instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, and what came back.
+      placeholder: |
+        Ran `find_resources` with label_selector "env=prod" on connection "prod".
+        Expected three servers; got an empty array with no error.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: doctor output
+      description: Output of `npx @donedynamics/hetzner-mcp doctor`. Read it before pasting.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: hetzner-mcp version
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which Hetzner API
+      description: |
+        These are separate APIs with separate credentials, and the same word can mean
+        different things on each — a Cloud server is a virtual machine, a Robot server
+        is leased hardware. `doctor` reports the surface of every connection.
+      options:
+        - Hetzner Cloud (api.hetzner.cloud) — servers, volumes, networks, DNS
+        - Hetzner API (api.hetzner.com) — Storage Boxes
+        - Hetzner Robot (robot-ws.your-server.de) — dedicated servers
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: operation
+    attributes:
+      label: Tool or operation id
+      description: |
+        The tool you called, or the catalog operation id if it went through
+        `execute_read_operation` / `execute_write_operation`. This is the single most
+        useful field: the catalog is generated from Hetzner's OpenAPI specifications,
+        so an id pins the exact endpoint involved.
+      placeholder: find_resources — or list_servers
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Code
+        - Claude Desktop
+        - Cursor
+        - Codex CLI
+        - Kimi CLI
+        - Zed
+        - OpenCode
+        - Other / direct stdio
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Node version
+      placeholder: Windows 11, Node 22.11.0
+    validations:
+      required: true
