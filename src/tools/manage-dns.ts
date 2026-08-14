@@ -47,7 +47,6 @@ import { z } from 'zod';
 
 import { getOperation } from '../catalog/index.js';
 import { request } from '../http/client.js';
-import { attachAction, shapeResponse } from '../shaping/envelope.js';
 import { HetznerError } from '../types.js';
 import type {
   ActionRef,
@@ -60,6 +59,8 @@ import type {
   ToolResult,
 } from '../types.js';
 import {
+  DESTRUCTIVE_ENABLEMENT,
+  attachAction,
   awaitAction,
   connectionProperty,
   optionalNumber,
@@ -70,8 +71,10 @@ import {
   requiredString,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
   unsettledHint,
+  validationFrom,
   waitProperty,
 } from './shared.js';
 
@@ -197,7 +200,9 @@ const REFUSED: ReadonlyMap<string, Refusal> = new Map<string, Refusal>([
     {
       message:
         '`set_records` is not available through manage_dns. It replaces the entire record set for one name and type, so every record of that name and type that is not in the request is deleted — expressed as "add a subdomain" it removes the addresses already there, and reports success.',
-      hint: 'add_records, remove_records and update_records change a record set without touching records they do not name. A deliberate wholesale replace is the catalog operation `set_zone_rrset_records`, reachable through execute_destructive_operation once a human has enabled HETZNER_ALLOW_DESTRUCTIVE for this connection.',
+      hint:
+        'add_records, remove_records and update_records change a record set without touching records they do not name. A deliberate wholesale replace is the catalog operation `set_zone_rrset_records`, reachable through execute_destructive_operation. ' +
+        DESTRUCTIVE_ENABLEMENT,
     },
   ],
   [
@@ -205,7 +210,9 @@ const REFUSED: ReadonlyMap<string, Refusal> = new Map<string, Refusal>([
     {
       message:
         '`import_zonefile` is not available through manage_dns. Importing a zone file replaces every record set in the zone with the contents of the file, so anything the file omits is deleted.',
-      hint: 'The catalog operation is `import_zone_zonefile`, reachable through execute_destructive_operation once a human has enabled HETZNER_ALLOW_DESTRUCTIVE for this connection. get_zone_zonefile exports the zone as it stands, which is the only copy of what an import would overwrite.',
+      hint:
+        'The catalog operation is `import_zone_zonefile`, reachable through execute_destructive_operation. get_zone_zonefile exports the zone as it stands, which is the only copy of what an import would overwrite. ' +
+        DESTRUCTIVE_ENABLEMENT,
     },
   ],
   [
@@ -213,7 +220,9 @@ const REFUSED: ReadonlyMap<string, Refusal> = new Map<string, Refusal>([
     {
       message:
         '`delete_zone` is not available through manage_dns. Deleting a zone destroys every record set it contains — every name and every type at once — and Hetzner keeps no copy.',
-      hint: 'The catalog operation is `delete_zone`, reachable through execute_destructive_operation once a human has enabled HETZNER_ALLOW_DESTRUCTIVE for this connection. get_zone_zonefile exports the zone as it stands, which is the only copy of what the deletion would destroy.',
+      hint:
+        'The catalog operation is `delete_zone`, reachable through execute_destructive_operation. get_zone_zonefile exports the zone as it stands, which is the only copy of what the deletion would destroy. ' +
+        DESTRUCTIVE_ENABLEMENT,
     },
   ],
   [
@@ -221,7 +230,9 @@ const REFUSED: ReadonlyMap<string, Refusal> = new Map<string, Refusal>([
     {
       message:
         '`delete_rrset` is not available through manage_dns. Deleting an RRSet removes every record of that name and type at once, which is the same loss as a blind replace.',
-      hint: 'remove_records deletes named record values and leaves the rest of the set standing. To remove the set itself, the catalog operation is `delete_zone_rrset`, reachable through execute_destructive_operation once a human has enabled HETZNER_ALLOW_DESTRUCTIVE for this connection.',
+      hint:
+        'remove_records deletes named record values and leaves the rest of the set standing. To remove the set itself, the catalog operation is `delete_zone_rrset`, reachable through execute_destructive_operation. ' +
+        DESTRUCTIVE_ENABLEMENT,
     },
   ],
 ]);
@@ -297,7 +308,7 @@ function reachable(name: OperationName): OperationEntry {
     throw new HetznerError(
       `\`${name}\` maps to \`${entry.catalogId}\`, which the catalog classifies as destructive; manage_dns does not run destructive operations.`,
       'destructive_blocked',
-      'Destructive DNS operations are reachable through execute_destructive_operation once a human has enabled HETZNER_ALLOW_DESTRUCTIVE for this connection.',
+      `Destructive DNS operations are reachable through execute_destructive_operation. ${DESTRUCTIVE_ENABLEMENT}`,
     );
   }
   return entry;
@@ -433,16 +444,7 @@ const RECORDS = z.array(RECORD).min(1).max(MAX_RECORDS);
 
 function readRecords(args: Record<string, unknown>, operation: OperationName): RecordInput[] {
   const parsed = RECORDS.safeParse(args['records']);
-  if (!parsed.success) {
-    const detail = parsed.error.issues
-      .map((issue) => `${issue.path.join('.') || 'records'}: ${issue.message}`)
-      .join('; ');
-    throw new HetznerError(
-      `\`records\` is required by ${operation} and was not usable: ${detail}`,
-      'validation',
-      `Between 1 and ${MAX_RECORDS} records, each an object with a \`value\`.`,
-    );
-  }
+  if (!parsed.success) throw validationFrom(parsed.error, 'records');
 
   // Hetzner identifies a record inside a set BY ITS VALUE, so a repeated value
   // is not an ordering question the API resolves — it is two rows claiming to

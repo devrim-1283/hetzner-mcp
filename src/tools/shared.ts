@@ -22,6 +22,7 @@ import {
   renderEnvelope,
   shapeResponse,
   type EnvelopeMeta,
+  type HetznerPrice,
 } from '../shaping/envelope.js';
 import { redact } from '../shaping/redact.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
@@ -171,7 +172,7 @@ export function resolveConnection(
     throw new HetznerError(
       `No connection named "${requested}"${surfaceClause(opts.surfaces)}.`,
       'validation',
-      `Configured: ${names.join(', ')}. Connections are defined by the person running this server; a tool cannot create one or point at a new host.`,
+      `Configured: ${names.join(', ')}. ${CONNECTIONS_ARE_OPERATOR_OWNED}`,
     );
   }
   return get(cfg, requested);
@@ -290,7 +291,7 @@ export function requiredId(args: Record<string, unknown>, key = 'id'): number {
   throw new HetznerError(
     `\`${key}\` must be a positive integer id.`,
     'validation',
-    'find_resources reports the id of everything it lists.',
+    FIND_RESOURCES_REPORTS_IDS,
   );
 }
 
@@ -365,7 +366,80 @@ export function errorResult(error: unknown): ToolResult {
  * is not a boundary, it is a habit.
  */
 export { renderEnvelope, shapeResponse, attachAction, attachBilling, billingFromPrices };
-export type { EnvelopeMeta };
+export type { EnvelopeMeta, HetznerPrice };
+
+// ---------------------------------------------------------------------------
+// Copy owned in one place
+//
+// Each constant below states a fact that more than one tool has to state.
+// Duplicated COPY is worse than duplicated code: nothing fails when two copies
+// drift, no test goes red, and the person who discovers that the product
+// describes one switch two ways is the user.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a human turns destructive operations on — both halves of it.
+ *
+ * Three modules said a version of this and two of them CONTRADICTED each other.
+ * `manage_dns` called `HETZNER_ALLOW_DESTRUCTIVE` something enabled "for this
+ * connection", which reads as a per-connection switch; `search_operations` and
+ * `register.ts` called it a process-wide flag needing a restart, which omits
+ * that a connection can still refuse. A reader who met both could not tell which
+ * switch to reach for, and either one alone leads to a failed attempt.
+ *
+ * It is genuinely both, because the two are ANDed: the flag is read once at
+ * startup, so setting it needs a restart, and a connection that opted out in the
+ * config file stays closed afterwards. Said in that order — do this, then check
+ * that — because the reader wants to know what to DO.
+ *
+ * It names its own subject ("destructive operations") rather than saying "them",
+ * because it follows four different lead-in sentences and in three of them the
+ * nearest noun is a single operation, not the class. A shared sentence has to
+ * stand on its own or it acquires a different meaning at every call site.
+ */
+export const DESTRUCTIVE_ENABLEMENT =
+  'Enabling destructive operations takes a human: set HETZNER_ALLOW_DESTRUCTIVE=true (or ' +
+  '`allowDestructive` in the config file) and restart the server, because the flag is read once at ' +
+  'startup. Then check the connection itself — one whose own `allowDestructive` is false stays ' +
+  'closed even with the flag set. The flag opens the door; each connection may still decline it.';
+
+/**
+ * A stopped server is still a billed server.
+ *
+ * `create_server` states it on every create; `control_resource` states it after
+ * `poweroff` and after `shutdown`. The near-universal assumption is the
+ * opposite, which makes it both the sentence a summary is most likely to drop
+ * and the one the person paying most needs kept.
+ */
+export const SERVER_BILLED_UNTIL_DELETED =
+  'Hetzner bills this server from the moment it was created until it is deleted; powering it off ' +
+  'does not stop the charge.';
+
+/**
+ * The same economics for a resource that was detached rather than stopped: a
+ * Volume attached to nothing, a Floating or Primary IP assigned to nothing.
+ *
+ * Kept separate from the sentence above rather than blurred into one vague
+ * claim, because the misconception is a different one — "I detached it" reads as
+ * "I stopped paying for it", and the answer is that only deletion does that.
+ */
+export const RESERVED_AND_BILLED_UNTIL_DELETED =
+  'It stays reserved to the project and is billed for as long as it exists, attached or not; only ' +
+  'deleting it stops the charge.';
+
+/** Where a caller gets an id. Three tools were carrying their own copy of it. */
+export const FIND_RESOURCES_REPORTS_IDS = 'find_resources reports the id of everything it lists.';
+
+/**
+ * Why a connection problem cannot be fixed from inside a tool call.
+ *
+ * The two copies of this had already drifted by one word — "a new host" against
+ * "another host" — which is the exact shape the rot takes: nothing breaks, and
+ * the product simply says one thing two ways.
+ */
+export const CONNECTIONS_ARE_OPERATOR_OWNED =
+  'Connections are defined by the person running this server; a tool cannot create one or point at ' +
+  'another host.';
 
 /**
  * Which danger classes this server can actually reach, given its configuration.
@@ -446,7 +520,7 @@ export function assertDanger(
 
   const where =
     operation.danger === 'destructive'
-      ? `\`${operationId}\` runs through execute_destructive_operation${destructiveEnabled ? '' : ', which is registered only while destructive operations are enabled for this server'}.`
+      ? `\`${operationId}\` runs through execute_destructive_operation.${destructiveEnabled ? '' : ` That tool is not registered on this server: it exists only while destructive operations are enabled. ${DESTRUCTIVE_ENABLEMENT}`}`
       : operation.danger === 'write'
         ? `\`${operationId}\` runs through execute_write_operation.`
         : `\`${operationId}\` runs through execute_read_operation.`;
