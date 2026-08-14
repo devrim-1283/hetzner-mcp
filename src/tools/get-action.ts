@@ -42,12 +42,13 @@ import { z } from 'zod';
 
 import { getOperation } from '../catalog/index.js';
 import { request } from '../http/client.js';
-import { attachAction, shapeResponse, type EnvelopeMeta } from '../shaping/envelope.js';
 import { defaultShape } from '../shaping/project.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
 import type { ActionRef, Connection, Surface, ToolDef, ToolExtra, ToolResult } from '../types.js';
 import {
+  FIND_RESOURCES_REPORTS_IDS,
   actionPollPath,
+  attachAction,
   awaitAction,
   connectionProperty,
   optionalNumber,
@@ -58,9 +59,11 @@ import {
   requiredId,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
   unsettledHint,
   waitProperty,
+  type EnvelopeMeta,
 } from './shared.js';
 
 /** Hetzner caps `per_page` at 50 on every paginated collection. */
@@ -188,7 +191,7 @@ function readScope(
     throw new HetznerError(
       `\`resource_id\` is required alongside \`resource_type: "${type}"\`.`,
       'validation',
-      'find_resources reports the id of everything it lists.',
+      FIND_RESOURCES_REPORTS_IDS,
     );
   }
   return { type, kind, id: requiredId(args, 'resource_id') };
@@ -208,28 +211,6 @@ function actionReadPath(
 ): string {
   if (scope === undefined) return actionPollPath(surface, actionId);
   return `/${scope.kind.segment}/${scope.id}/actions/${actionId}`;
-}
-
-/**
- * Repeats Hetzner's own `error.code` into the message text.
- *
- * `errorResult` in the seam renders a HetznerError's message and hint, and the
- * `apiCode` field is not part of either — so without this the closed-vocabulary
- * code Hetzner supplied (`server_already_attached`, `resource_unavailable`, ...)
- * never reaches the transcript, and the caller is left with prose where there
- * was a machine-readable reason.
- */
-function nameFailureCode(error: unknown): unknown {
-  if (!(error instanceof HetznerError)) return error;
-  if (error.kind !== 'action_failed' || error.apiCode === undefined) return error;
-  return new HetznerError(
-    `${error.message} Hetzner's code for it is \`${error.apiCode}\`.`,
-    error.kind,
-    error.hint,
-    error.status,
-    error.apiCode,
-    error.validationErrors,
-  );
 }
 
 function actionRows(payload: unknown): ActionRef[] {
@@ -275,17 +256,14 @@ async function readOneAction(
   }
 
   const waitMs = readWaitMs(args);
-  let settled: boolean;
-  let current: ActionRef;
-  try {
-    // Handles both cases: an Action that is already terminal returns
-    // immediately, a running one is polled with the seam's backoff.
-    const outcome = await awaitAction(connection, action, extra, waitMs);
-    current = outcome.action;
-    settled = outcome.settled;
-  } catch (error) {
-    throw nameFailureCode(error);
-  }
+  // Handles both cases: an Action that is already terminal returns immediately,
+  // a running one is polled with the seam's backoff. A failed Action throws, and
+  // `errorResult` renders Hetzner's own `error.code` alongside the message, so
+  // the closed-vocabulary reason reaches the transcript without being repeated
+  // into the message here.
+  const outcome = await awaitAction(connection, action, extra, waitMs);
+  const current = outcome.action;
+  const settled = outcome.settled;
 
   const notes: string[] = [
     settled

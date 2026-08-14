@@ -40,7 +40,6 @@ import {
   toQuery,
   type CursorState,
 } from '../shaping/cursor.js';
-import { shapeResponse, type EnvelopeMeta } from '../shaping/envelope.js';
 import type { Row } from '../shaping/project.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
 import type { Connection, OperationFamily, ServerConfig, Surface, ToolDef } from '../types.js';
@@ -52,7 +51,9 @@ import {
   renderEnvelope,
   resolveConnectionFanOut,
   runTool,
+  shapeResponse,
   toRecord,
+  type EnvelopeMeta,
 } from './shared.js';
 
 // ---------------------------------------------------------------------------

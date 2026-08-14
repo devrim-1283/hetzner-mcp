@@ -29,21 +29,28 @@
 
 import { z } from 'zod';
 
-import { getOperation } from '../catalog/index.js';
 import { request } from '../http/client.js';
-import { attachAction, shapeResponse } from '../shaping/envelope.js';
 import { HetznerError } from '../types.js';
 import type { ServerConfig, Surface, ToolDef, ToolExtra, ToolResult } from '../types.js';
 import {
+  DESTRUCTIVE_ENABLEMENT,
+  RESERVED_AND_BILLED_UNTIL_DELETED,
+  SERVER_BILLED_UNTIL_DELETED,
+  assertDanger,
+  attachAction,
+  availableDangerClasses,
   awaitAction,
   connectionProperty,
+  noActionHint,
   readAction,
   readWaitMs,
   renderEnvelope,
   requiredId,
   resolveConnection,
   runTool,
+  shapeResponse,
   unsettledHint,
+  validationFrom,
   waitProperty,
 } from './shared.js';
 
@@ -170,8 +177,9 @@ interface ActionSpec {
 /**
  * `rebuild` is absent from this table, and from the `action` enum, on purpose —
  * see `ELSEWHERE` below. So is every other operation the catalog classifies as
- * destructive, and `assertWrite` checks that claim against the catalog rather
- * than trusting this table to stay true after a regeneration.
+ * destructive, and the `assertDanger` call in the handler checks that claim
+ * against the catalog on every call rather than trusting this table to stay true
+ * after a regeneration.
  */
 const SPECS: Record<ResourceType, Partial<Record<Action, ActionSpec>>> = {
   server: {
@@ -185,13 +193,17 @@ const SPECS: Record<ResourceType, Partial<Record<Action, ActionSpec>>> = {
       operationId: 'poweroff_server',
       params: [],
       required: [],
-      hint: 'This cut power to the server without asking the operating system, the equivalent of pulling the plug: anything not yet written to disk is gone. `shutdown` is the graceful form. A powered-off server is still billed.',
+      hint:
+        'This cut power to the server without asking the operating system, the equivalent of pulling the plug: anything not yet written to disk is gone. `shutdown` is the graceful form. ' +
+        SERVER_BILLED_UNTIL_DELETED,
     },
     shutdown: {
       operationId: 'shutdown_server',
       params: [],
       required: [],
-      hint: 'This sent an ACPI shutdown request, which the operating system carries out itself. A machine that is hung, or has no ACPI handler installed, ignores it and stays running — `poweroff` cuts power regardless. A powered-off server is still billed.',
+      hint:
+        'This sent an ACPI shutdown request, which the operating system carries out itself. A machine that is hung, or has no ACPI handler installed, ignores it and stays running — `poweroff` cuts power regardless. ' +
+        SERVER_BILLED_UNTIL_DELETED,
     },
     reboot: {
       operationId: 'reboot_server',
@@ -292,7 +304,7 @@ const SPECS: Record<ResourceType, Partial<Record<Action, ActionSpec>>> = {
       operationId: 'detach_volume',
       params: [],
       required: [],
-      hint: 'The volume is detached and keeps its contents. It is billed for as long as it exists, attached or not.',
+      hint: 'The volume is detached and keeps its contents. ' + RESERVED_AND_BILLED_UNTIL_DELETED,
     },
     resize: {
       operationId: 'resize_volume',
@@ -314,7 +326,7 @@ const SPECS: Record<ResourceType, Partial<Record<Action, ActionSpec>>> = {
       operationId: 'unassign_floating_ip',
       params: [],
       required: [],
-      hint: 'The floating IP no longer routes anywhere. It stays reserved to the project, and billed, until it is deleted.',
+      hint: 'The floating IP no longer routes anywhere. ' + RESERVED_AND_BILLED_UNTIL_DELETED,
     },
   },
   primary_ip: {
@@ -329,7 +341,9 @@ const SPECS: Record<ResourceType, Partial<Record<Action, ActionSpec>>> = {
       operationId: 'unassign_primary_ip',
       params: [],
       required: [],
-      hint: 'The primary IP is detached, leaving the server without a public address of that protocol. The IP stays reserved to the project, and billed, until it is deleted.',
+      hint:
+        'The primary IP is detached, leaving the server without a public address of that protocol. ' +
+        RESERVED_AND_BILLED_UNTIL_DELETED,
     },
   },
   load_balancer: {
@@ -453,7 +467,8 @@ function typesAccepting(action: string): ResourceType[] {
 const ELSEWHERE: ReadonlyMap<string, string> = new Map([
   [
     'rebuild',
-    'Rebuilding a server erases every disk on it and reinstalls from an image, so the catalog classifies it as destructive and this tool does not carry it. It is the `rebuild_server` operation, reachable through execute_destructive_operation on a connection that allows destructive operations.',
+    'Rebuilding a server erases every disk on it and reinstalls from an image, so the catalog classifies it as destructive and this tool does not carry it. It is the `rebuild_server` operation, reachable through execute_destructive_operation. ' +
+      DESTRUCTIVE_ENABLEMENT,
   ],
 ]);
 
@@ -480,25 +495,6 @@ function resolveSpec(resourceType: ResourceType, action: string): ActionSpec {
     `\`${action}\` is not an action on a ${resourceType}.`,
     'validation',
     `A ${resourceType} accepts: ${legal}.${pointer}`,
-  );
-}
-
-/**
- * The catalog's verdict, checked rather than assumed.
- *
- * The table above is hand-written and the catalog is regenerated from Hetzner's
- * spec; if a regeneration ever reclassifies one of these ids, this closes the
- * door instead of leaving a destructive operation reachable through a tool
- * annotated `destructiveHint: false`. The transport applies the same rule again
- * from its own side, so a stale catalog cannot open it either.
- */
-function assertWrite(spec: ActionSpec, resourceType: ResourceType, action: Action): void {
-  const operation = getOperation(spec.operationId);
-  if (operation === undefined || operation.danger === 'write') return;
-  throw new HetznerError(
-    `\`${action}\` on a ${resourceType} is the ${operation.danger} operation \`${spec.operationId}\`, which control_resource does not run.`,
-    'validation',
-    'Operations classified destructive are reachable only through execute_destructive_operation, on a connection that allows them.',
   );
 }
 
@@ -698,10 +694,7 @@ function parseArgs(raw: Record<string, unknown>): ControlArgs {
     resolveSpec(resourceType, action);
   }
 
-  const detail = parsed.error.issues
-    .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-    .join('; ');
-  throw new HetznerError(`Invalid arguments: ${detail}`, 'validation');
+  throw validationFrom(parsed.error, 'arguments');
 }
 
 // ---------------------------------------------------------------------------
@@ -716,7 +709,16 @@ async function handler(
   return runTool(async () => {
     const args = parseArgs(rawArgs);
     const spec = resolveSpec(args.resource_type, args.action);
-    assertWrite(spec, args.resource_type, args.action);
+    // The catalog's verdict, read at call time rather than trusted from the
+    // table above: if a regeneration reclassifies one of these ids, the door
+    // closes instead of leaving a destructive operation reachable through a tool
+    // annotated `destructiveHint: false`.
+    assertDanger(
+      spec.operationId,
+      ['write'],
+      'control_resource',
+      availableDangerClasses(cfg).includes('destructive'),
+    );
     assertParams(args, spec);
 
     // Required with no default, enforced here as well as in the schema: a write
@@ -746,7 +748,7 @@ async function handler(
 
     const notes = [spec.hint];
     if (action === undefined) {
-      notes.push('Hetzner returned no Action for this call, so nothing was awaited.');
+      notes.push(noActionHint(spec.operationId));
     } else if (!settled) {
       notes.push(unsettledHint(action));
     }
@@ -782,7 +784,7 @@ export const controlResourceTool: ToolDef = {
     title: 'Run a Hetzner action',
     readOnlyHint: false,
     // Nothing this tool reaches is classified destructive by the catalog, and
-    // `assertWrite` re-checks that against the catalog on every call. The
+    // `assertDanger` re-checks that against the catalog on every call. The
     // hard-power verbs risk unflushed writes, which is a cost stated in the copy
     // rather than a claim that stored data is being destroyed — see the header.
     destructiveHint: false,

@@ -33,7 +33,6 @@
 import { z } from 'zod';
 
 import { request } from '../http/client.js';
-import { shapeResponse, type EnvelopeMeta } from '../shaping/envelope.js';
 import { downsampleMetrics, type MetricsPayload } from '../shaping/project.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
 import type { Connection, ToolDef } from '../types.js';
@@ -45,7 +44,9 @@ import {
   requiredString,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
+  type EnvelopeMeta,
 } from './shared.js';
 
 /** Matches `downsampleMetrics`'s own default; ~120 points is a readable shape. */

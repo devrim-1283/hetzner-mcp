@@ -11,10 +11,17 @@
  *   HETZNER_READ_ONLY          drops every tool whose surface is 'write' or
  *                              'destructive'.
  *
- *   HETZNER_ALLOW_DESTRUCTIVE  when it is not enabled,
+ *   HETZNER_ALLOW_DESTRUCTIVE  when it is not enabled — the process-wide flag
+ *                              unset, OR every connection having opted out with
+ *                              `allowDestructive: false` —
  *                              `execute_destructive_operation` IS NOT
  *                              REGISTERED — absent from tools/list entirely,
  *                              not listed-and-refusing.
+ *
+ *                              Both terms, because that is what
+ *                              `availableDangerClasses` actually computes. A
+ *                              header that named only the flag would describe a
+ *                              gate one condition looser than the one that runs.
  *
  * That second choice is the load-bearing one, so the reasoning in full:
  *

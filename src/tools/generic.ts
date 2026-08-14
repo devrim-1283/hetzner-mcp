@@ -75,7 +75,6 @@ import {
   toQuery,
   type CursorState,
 } from '../shaping/cursor.js';
-import { shapeResponse, type EnvelopeMeta } from '../shaping/envelope.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
 import type {
   CatalogOperation,
@@ -91,8 +90,13 @@ import type {
   ToolResult,
 } from '../types.js';
 import {
+  CONNECTIONS_ARE_OPERATOR_OWNED,
+  DESTRUCTIVE_ENABLEMENT,
+  assertDanger,
+  availableDangerClasses,
   awaitAction,
   connectionProperty,
+  noActionHint,
   optionalNumber,
   optionalString,
   readAction,
@@ -101,9 +105,11 @@ import {
   requiredString,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
   unsettledHint,
   waitProperty,
+  type EnvelopeMeta,
 } from './shared.js';
 
 /**
@@ -236,32 +242,9 @@ const DANGER_PHRASE: Record<DangerClass, string> = {
   destructive: 'a destructive operation',
 };
 
-/** How a door's admitted class is named in a refusal. */
-const DOOR_PHRASE: Record<DangerClass, string> = {
-  safe: 'read-only',
-  write: 'write',
-  destructive: 'destructive',
-};
-
 // ---------------------------------------------------------------------------
 // What this server can run
 // ---------------------------------------------------------------------------
-
-/**
- * The danger classes with a door on this server.
- *
- * Answered from the server-wide flags — the same two values `register.ts` uses
- * to decide which doors exist — so search results and the registered tool
- * surface cannot disagree. Per-connection `allowDestructive` overrides are
- * deliberately NOT unioned in: registration is a process-wide decision made once
- * at startup, and widening the catalog view because one connection is permissive
- * would surface operations with no door at all. Under-reporting is the safe
- * direction; an operation we hide is one the model never stalls on.
- */
-function availableDanger(cfg: ServerConfig): DangerClass[] {
-  if (cfg.readOnly) return ['safe'];
-  return cfg.allowDestructive ? ['safe', 'write', 'destructive'] : ['safe', 'write'];
-}
 
 function catalogProvenance(): string {
   const specs = METADATA.specs
@@ -296,9 +279,7 @@ function unavailableClass(cfg: ServerConfig, operation: CatalogOperation): Hetzn
   return new HetznerError(
     `Operation \`${operation.id}\` is ${DANGER_PHRASE[operation.danger]} and destructive operations are off for this server.`,
     'destructive_blocked',
-    'While they are off, execute_destructive_operation is not registered at all. A human can enable ' +
-      'them with HETZNER_ALLOW_DESTRUCTIVE=true (or `allowDestructive` in the config file) and a ' +
-      'server restart.',
+    `While they are off, execute_destructive_operation is not registered at all. ${DESTRUCTIVE_ENABLEMENT}`,
   );
 }
 
@@ -312,7 +293,8 @@ function unavailableClass(cfg: ServerConfig, operation: CatalogOperation): Hetzn
 function mustFindOperation(cfg: ServerConfig, id: string): CatalogOperation {
   const operation = getOperation(id);
   if (operation === undefined) throw unknownOperation(id);
-  if (!availableDanger(cfg).includes(operation.danger)) throw unavailableClass(cfg, operation);
+  if (!availableDangerClasses(cfg).includes(operation.danger))
+    throw unavailableClass(cfg, operation);
   return operation;
 }
 
@@ -324,24 +306,17 @@ function mustFindOperation(cfg: ServerConfig, id: string): CatalogOperation {
  * Layer 2 of the three-layer gate. See the file header: the door an operation
  * arrived through is evidence of the caller's intent, never proof of the
  * operation's class.
+ *
+ * The danger half is `assertDanger` from the seam, which re-reads the
+ * classification from the catalog and owns the one sentence that names where the
+ * operation does live. The METHOD half stays here, because it is a check the
+ * seam does not make: the class and the verb are generated independently, so a
+ * POST arriving classified `safe` would otherwise run through a tool annotated
+ * `readOnlyHint: true` — a lie told to the host's permission model.
  */
-function guardDoor(operation: CatalogOperation, door: Door): void {
-  if (operation.danger === door.danger && door.methods.includes(operation.method)) return;
-
-  if (operation.danger !== door.danger) {
-    const correct = doorFor(operation.danger);
-    throw new HetznerError(
-      `Operation \`${operation.id}\` is ${DANGER_PHRASE[operation.danger]} and ${door.tool} runs ` +
-        `${DOOR_PHRASE[door.danger]} operations only.`,
-      'validation',
-      correct === undefined
-        ? 'No tool on this server runs operations of that class.'
-        : operation.danger === 'destructive'
-          ? `\`${operation.id}\` runs through ${correct.tool}, which is registered only while ` +
-            'destructive operations are enabled for this server.'
-          : `\`${operation.id}\` runs through ${correct.tool}.`,
-    );
-  }
+function guardDoor(operation: CatalogOperation, door: Door, destructiveEnabled: boolean): void {
+  assertDanger(operation.id, [door.danger], door.tool, destructiveEnabled);
+  if (door.methods.includes(operation.method)) return;
 
   // Class matches but the verb does not: the generated catalog contradicts
   // itself. Refusing beats guessing which half is right.
@@ -383,8 +358,7 @@ function guardSurface(
     'surface_mismatch',
     candidates.length > 0
       ? `Connections on \`${operation.surface}\`: ${candidates.join(', ')}.`
-      : `No configured connection is on \`${operation.surface}\`. Connections are defined by the ` +
-          'person running this server; a tool cannot create one or point at another host.',
+      : `No configured connection is on \`${operation.surface}\`. ${CONNECTIONS_ARE_OPERATOR_OWNED}`,
   );
 }
 
@@ -604,7 +578,7 @@ function toSearchRow(operation: CatalogOperation): SearchRow {
 }
 
 function requestedDanger(args: Record<string, unknown>, cfg: ServerConfig): DangerClass[] {
-  const available = availableDanger(cfg);
+  const available = availableDangerClasses(cfg);
   const requested = optionalString(args, 'danger');
   if (requested === undefined) return available;
   return available.filter((danger) => danger === requested);
@@ -629,7 +603,10 @@ function searchHandler(args: Record<string, unknown>, cfg: ServerConfig): ToolRe
   if (rows.length === 0) {
     notes.push(`No operations matched. ${catalogProvenance()}`);
     const requested = optionalString(args, 'danger');
-    if (requested !== undefined && !availableDanger(cfg).includes(requested as DangerClass)) {
+    if (
+      requested !== undefined &&
+      !availableDangerClasses(cfg).includes(requested as DangerClass)
+    ) {
       notes.push(
         cfg.readOnly
           ? 'This server is running read-only, so only `safe` operations have a door.'
@@ -791,7 +768,7 @@ async function executeHandler(
     // connection is even looked at, so an unknown id is never the thing that
     // decides which credential gets resolved.
     const operation = mustFindOperation(cfg, requiredString(args, 'operation_id'));
-    guardDoor(operation, shape.door);
+    guardDoor(operation, shape.door, availableDangerClasses(cfg).includes('destructive'));
 
     const connection = resolveConnection(args, cfg, { requireExplicit: true });
     guardSurface(operation, connection, cfg);
@@ -981,10 +958,7 @@ async function renderMutation(
     };
     if (!settled.settled) notes.push(unsettledHint(settled.action));
   } else if (operation.returnsAction === true) {
-    notes.push(
-      `The catalog records \`${operation.id}\` as returning an Action; this response carried none, ` +
-        'so nothing was awaited.',
-    );
+    notes.push(noActionHint(operation.id));
   }
 
   return renderEnvelope(

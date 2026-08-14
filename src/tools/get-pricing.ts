@@ -44,7 +44,6 @@ import {
   PRICING_CATEGORY_BY_OPERATION,
 } from '../catalog/index.js';
 import { request } from '../http/client.js';
-import { shapeResponse, type EnvelopeMeta } from '../shaping/envelope.js';
 import type { Row } from '../shaping/project.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
 import type { Connection, ToolDef } from '../types.js';
@@ -54,7 +53,9 @@ import {
   renderEnvelope,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
+  type EnvelopeMeta,
 } from './shared.js';
 
 /**

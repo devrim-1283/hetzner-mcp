@@ -38,7 +38,6 @@
 import { z } from 'zod';
 
 import { request } from '../http/client.js';
-import { shapeResponse } from '../shaping/envelope.js';
 import { HetznerError } from '../types.js';
 import type {
   Connection,
@@ -49,6 +48,7 @@ import type {
   ToolResult,
 } from '../types.js';
 import {
+  FIND_RESOURCES_REPORTS_IDS,
   connectionProperty,
   optionalBoolean,
   renderEnvelope,
@@ -56,6 +56,7 @@ import {
   requiredString,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
 } from './shared.js';
 
@@ -439,9 +440,7 @@ export const setLabelsTool: ToolDef = {
       .describe('Which kind of resource the id belongs to. find_resources reports both.'),
     id: z
       .union([z.number().int().positive(), z.string()])
-      .describe(
-        'Numeric id of the resource. find_resources reports the id of everything it lists.',
-      ),
+      .describe(`Numeric id of the resource. ${FIND_RESOURCES_REPORTS_IDS}`),
     labels: LABELS.describe(
       `Labels to set, as key/value pairs. A null value removes that key. Keys are an optional DNS-subdomain prefix and a slash, then a name of 1-${MAX_NAME_LENGTH} characters beginning and ending with a letter or digit and otherwise letters, digits, dashes, underscores and dots (env, team.example.com/owner). Values follow the same shape and may also be empty, which is a real value and not a removal. The "${RESERVED_PREFIX}/" prefix is reserved by Hetzner.`,
     ),
