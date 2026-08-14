@@ -390,11 +390,15 @@ export function availableDangerClasses(cfg: ServerConfig): DangerClass[] {
   const writable = !cfg.readOnly && connections.some((connection) => !connection.readOnly);
   if (!writable) return ['safe'];
 
-  // `connection.allowDestructive` has already been ANDed with the global flag
-  // by the config layer, so this cannot re-open what the flag closed.
-  const destructive = connections.some(
-    (connection) => !connection.readOnly && connection.allowDestructive,
-  );
+  // Both terms, deliberately, even though the config layer already ANDs the
+  // global flag into every connection. Relying on that alone would make this
+  // function correct only because of a guarantee made in a different file: a
+  // ServerConfig assembled any other way — a test, a future embedder — would
+  // open the destructive door from a connection flag while the summary said
+  // closed. Repeating the check costs one `&&` and makes the invariant local.
+  const destructive =
+    cfg.allowDestructive &&
+    connections.some((connection) => !connection.readOnly && connection.allowDestructive);
   return destructive ? ['safe', 'write', 'destructive'] : ['safe', 'write'];
 }
 
