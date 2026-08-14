@@ -294,7 +294,13 @@ function summarize(parsed: ParsedBody, fallback: string): string {
   return parsed.message ?? fallback;
 }
 
-const CLOUD_PROJECT_SCOPING =
+/**
+ * Exported so the tool layer can compose its own opening around it rather than
+ * restating it. This paragraph is the most valuable diagnostic in the product,
+ * and two copies of it in two layers would drift into two different
+ * explanations of the same phenomenon depending on which layer answered.
+ */
+export const CLOUD_PROJECT_SCOPING =
   'A Hetzner Cloud token belongs to exactly ONE project and there is no project parameter in the API, ' +
   "so a perfectly valid token pointed at another project's resource answers 404, not 403. " +
   'Confirm the token in this connection was created inside the project that owns the resource; ' +
