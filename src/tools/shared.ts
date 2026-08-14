@@ -13,14 +13,24 @@
  */
 
 import { z } from 'zod';
+import { getOperation } from '../catalog/index.js';
 import { request } from '../http/client.js';
-import { renderEnvelope } from '../shaping/envelope.js';
+import {
+  attachAction,
+  attachBilling,
+  billingFromPrices,
+  renderEnvelope,
+  shapeResponse,
+  type EnvelopeMeta,
+} from '../shaping/envelope.js';
 import { redact } from '../shaping/redact.js';
 import { HetznerError, SURFACE_LABELS } from '../types.js';
 import type {
   ActionRef,
   ActionStatus,
+  CatalogOperation,
   Connection,
+  DangerClass,
   ServerConfig,
   Surface,
   ToolExtra,
@@ -122,6 +132,12 @@ export function resolveConnection(
   const names = eligibleNames(cfg, opts.surfaces);
   const requested = optionalString(args, 'connection');
 
+  // Nothing serves this tool at all. Reported before every other check,
+  // because every message below would otherwise end in "One of: ." — a list of
+  // remedies with no remedies in it, which reads as a bug in the server rather
+  // than as a thing the reader can go and fix.
+  if (names.length === 0) throw noConnectionFor(cfg, opts.surfaces);
+
   if (requested === ALL_CONNECTIONS) {
     throw new HetznerError(
       `\`connection: "${ALL_CONNECTIONS}"\` is not supported by this tool.`,
@@ -171,6 +187,36 @@ export function resolveConnectionFanOut(
     return eligibleNames(cfg, opts.surfaces).map((name) => get(cfg, name));
   }
   return [resolveConnection(args, cfg, opts)];
+}
+
+/**
+ * "This tool has nothing to talk to" — said in terms of what the operator would
+ * have to add, not in terms of an empty list.
+ *
+ * The two cases are genuinely different problems. No connections at all means
+ * the server started with no credential configured. Connections that exist but
+ * none on the required surface means the operator configured a Hetzner Cloud
+ * project and then asked for something only the account API can answer, which
+ * is a different fix and a different documentation page.
+ */
+function noConnectionFor(cfg: ServerConfig, surfaces?: readonly Surface[]): HetznerError {
+  const configured = [...cfg.registry.connections.values()];
+  if (configured.length === 0) {
+    return new HetznerError(
+      'No connection is configured.',
+      'validation',
+      'This server needs at least one Hetzner credential. `hetzner-mcp doctor` reports what it found and what it expected.',
+    );
+  }
+  const wanted = (surfaces ?? []).map((surface) => SURFACE_LABELS[surface]).join(' or ');
+  const have = configured
+    .map((connection) => `${connection.name} (${SURFACE_LABELS[connection.surface]})`)
+    .join(', ');
+  return new HetznerError(
+    `No configured connection is on ${wanted}.`,
+    'surface_mismatch',
+    `This tool only works against ${wanted}. Configured: ${have}. A credential for one Hetzner API cannot be used against another.`,
+  );
 }
 
 function surfaceClause(surfaces?: readonly Surface[]): string {
@@ -287,6 +333,14 @@ export function errorResult(error: unknown): ToolResult {
     }
     parts.push(error.message);
     if (error.hint !== undefined) parts.push(error.hint);
+    // Hetzner's error.code is a closed vocabulary — `protected`,
+    // `uniqueness_error`, `resource_unavailable` — and it is what a user will
+    // search for and what Hetzner's own support will ask about. Dropping it
+    // here would mean the one identifier that survives a translation into
+    // ordinary prose never reaches the transcript at all.
+    if (error.apiCode !== undefined && !parts.some((part) => part.includes(error.apiCode!))) {
+      parts.push(`(Hetzner error code: ${error.apiCode})`);
+    }
     if (error.validationErrors !== undefined && error.validationErrors.length > 0) {
       parts.push(
         error.validationErrors
@@ -302,7 +356,124 @@ export function errorResult(error: unknown): ToolResult {
   return { content: [{ type: 'text', text: redact(parts.join(' ')) }], isError: true };
 }
 
-export { renderEnvelope };
+/**
+ * Re-exported so a tool has ONE import for the whole seam.
+ *
+ * Four of the five tool modules reported reaching past `shared.ts` into
+ * `shaping/envelope.js` for these, which is the seam admitting it was half
+ * built: a module boundary that covers the error path but not the success path
+ * is not a boundary, it is a habit.
+ */
+export { renderEnvelope, shapeResponse, attachAction, attachBilling, billingFromPrices };
+export type { EnvelopeMeta };
+
+/**
+ * Which danger classes this server can actually reach, given its configuration.
+ *
+ * ONE definition, because two would eventually disagree and the disagreement
+ * would be invisible: `register.ts` uses it to decide which tools exist, and
+ * `search_operations` uses it to decide which operations to offer. If search
+ * were more generous than registration, the model would be shown a door that is
+ * not there, call it, and be told it does not exist — a loop no rephrasing can
+ * escape, because the fix is a human setting an environment variable.
+ *
+ * The scan over connections is what keeps it honest in both directions. Reading
+ * only the global flag would advertise destructive operations on a server where
+ * every connection has opted out, and hide them on one where a single
+ * connection opted in.
+ *
+ * `readOnly` is checked first and nothing below can widen it, because it is a
+ * ceiling rather than a default.
+ */
+export function availableDangerClasses(cfg: ServerConfig): DangerClass[] {
+  const connections = [...cfg.registry.connections.values()];
+  const writable = !cfg.readOnly && connections.some((connection) => !connection.readOnly);
+  if (!writable) return ['safe'];
+
+  // `connection.allowDestructive` has already been ANDed with the global flag
+  // by the config layer, so this cannot re-open what the flag closed.
+  const destructive = connections.some(
+    (connection) => !connection.readOnly && connection.allowDestructive,
+  );
+  return destructive ? ['safe', 'write', 'destructive'] : ['safe', 'write'];
+}
+
+/**
+ * The catalog said this operation returns an Action and the response carried
+ * none.
+ *
+ * It exists for the same reason `unsettledHint` does: without one sentence
+ * owned in one place, five tool modules write five sentences for one fact, and
+ * a reader who meets two of them cannot tell whether they describe the same
+ * situation.
+ */
+export function noActionHint(operationId: string): string {
+  return `The catalog records ${operationId} as returning an Action and this response carried none, so there was nothing to wait for. The call itself succeeded.`;
+}
+
+/**
+ * Refuses an operation whose danger class does not belong to this door.
+ *
+ * Every door needs this check and each one was writing its own. Worse than the
+ * duplication is what the duplication does to the message: the refusal is the
+ * only place a caller learns WHERE the operation does live, and a version of
+ * that sentence per door means the pointer is right in some of them and stale
+ * in the rest.
+ *
+ * The classification is read from the catalog at call time rather than trusted
+ * from the caller, so regenerating the catalog after an upstream change closes
+ * a door rather than silently leaving it open.
+ */
+export function assertDanger(
+  operationId: string,
+  allowed: readonly DangerClass[],
+  door: string,
+  destructiveEnabled: boolean,
+): CatalogOperation {
+  const operation = getOperation(operationId);
+  if (operation === undefined) {
+    throw new HetznerError(
+      `No operation named \`${operationId}\`.`,
+      'validation',
+      'search_operations lists every operation this server knows, with its id.',
+    );
+  }
+  if (allowed.includes(operation.danger)) return operation;
+
+  const where =
+    operation.danger === 'destructive'
+      ? `\`${operationId}\` runs through execute_destructive_operation${destructiveEnabled ? '' : ', which is registered only while destructive operations are enabled for this server'}.`
+      : operation.danger === 'write'
+        ? `\`${operationId}\` runs through execute_write_operation.`
+        : `\`${operationId}\` runs through execute_read_operation.`;
+
+  throw new HetznerError(
+    `Operation \`${operationId}\` is a ${operation.danger} operation and ${door} runs ${allowed.join(' and ')} operations only.`,
+    'validation',
+    where,
+  );
+}
+
+/**
+ * A Zod failure rendered as a `HetznerError` the model can act on.
+ *
+ * Zod's own message names its model of the problem ("Invalid input: expected
+ * string, received number at records[0].value") rather than the caller's. This
+ * keeps the path, because the path is the actionable half, and drops the rest.
+ */
+export function validationFrom(error: z.ZodError, what: string): HetznerError {
+  const issues = error.issues.slice(0, 5).map((issue) => {
+    const path = issue.path.length === 0 ? what : `${what}.${issue.path.join('.')}`;
+    return `${path}: ${issue.message}`;
+  });
+  const more =
+    error.issues.length > issues.length ? ` (${error.issues.length - issues.length} more)` : '';
+  return new HetznerError(
+    `\`${what}\` is not valid.`,
+    'validation',
+    `${issues.join(' | ')}${more}`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Actions
