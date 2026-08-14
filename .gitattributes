@@ -8,10 +8,11 @@
 # CRLF cases into LF cases and the assertions would pass while testing nothing.
 test/install/adapters/__fixtures__/** -text
 
-# The vendored OpenAPI spec is hashed into src/generated/meta.ts. Rewriting its
-# line endings would change that hash and make `npm run codegen:check` fail on
-# a different platform than the one that generated it.
-scripts/coolify-openapi.json -text
+# The vendored OpenAPI specs are hashed into src/generated/meta.ts. Rewriting
+# their line endings would change those hashes and make `npm run codegen:check`
+# fail on a different platform than the one that generated it.
+scripts/hetzner-cloud.openapi.json -text
+scripts/hetzner-api.openapi.json -text
 
 *.png binary
 *.ico binary
