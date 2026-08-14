@@ -158,10 +158,21 @@ export interface CatalogMeta {
  * extra concept, and adding the surface to the tuple extends it to Robot and
  * the account-scoped API without a second mechanism.
  */
+/**
+ * Discriminated on purpose. The tag is repeated here rather than only on
+ * `Credential.kind` because TypeScript cannot narrow a function's return type
+ * from a sibling property: without it the transport must probe with
+ * `'token' in resolved`, and a surface added later that resolves to some third
+ * shape would type-check against every existing branch instead of failing to
+ * compile at the one place that has to change.
+ */
+export type ResolvedCredential =
+  { kind: 'bearer'; token: string } | { kind: 'basic'; user: string; password: string };
+
 export interface Credential {
   kind: 'bearer' | 'basic';
   /** Resolved lazily, cached for the process lifetime, never written to disk. */
-  resolve: () => Promise<{ token: string } | { user: string; password: string }>;
+  resolve: () => Promise<ResolvedCredential>;
 }
 
 export interface Connection {
@@ -261,6 +272,12 @@ export class HetznerError extends Error {
       | 'maintenance'
       | 'action_failed'
       | 'network'
+      /**
+       * The caller went away — an aborted turn, a closed client. It is not a
+       * fault and the tool layer suppresses it rather than rendering it, which
+       * it can only do if it is distinguishable from a real transport failure.
+       */
+      | 'cancelled'
       | 'unknown',
     /** Actionable next step shown to the model. */
     readonly hint?: string,
@@ -328,6 +345,17 @@ export interface ResponseMeta {
   billing?: { monthly?: string; hourly?: string; currency: string };
   /** Present when the call returned an Action. */
   action?: { id: number; status: ActionStatus; awaited: boolean };
+  /**
+   * Field names in `data` that Hetzner returns exactly once and has no endpoint
+   * to read back — a generated `root_password` above all. They are deliberately
+   * NOT redacted: the model is the only channel by which the user can ever
+   * receive them, and a server nobody can log into is not a server.
+   *
+   * Naming them here is what lets a tool say so, and lives in the contract
+   * rather than in the shaping layer because the tool layer must read it
+   * without depending on how the envelope was built.
+   */
+  one_time_secrets?: readonly string[];
 }
 
 /** Identical envelope across every tool. */
