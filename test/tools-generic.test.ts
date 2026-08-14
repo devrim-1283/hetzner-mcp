@@ -274,7 +274,10 @@ describe('door gating', () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('`create_server` is a write operation');
-    expect(text(result)).toContain('execute_read_operation runs read-only operations only');
+    // The refusal is worded once, by `assertDanger` in the seam, so the door's
+    // admitted class is named with the catalog's own vocabulary — `safe` — in
+    // every door's refusal rather than a per-door synonym for it.
+    expect(text(result)).toContain('execute_read_operation runs safe operations only');
     expect(text(result)).toContain('runs through execute_write_operation');
     expect(fetchMock).not.toHaveBeenCalled();
   });

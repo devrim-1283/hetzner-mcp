@@ -31,13 +31,6 @@ import { z } from 'zod';
 
 import { getPricingCategory } from '../catalog/index.js';
 import { request } from '../http/client.js';
-import {
-  attachAction,
-  attachBilling,
-  billingFromPrices,
-  shapeResponse,
-  type HetznerPrice,
-} from '../shaping/envelope.js';
 import { SERVER_FIELDS, SERVER_PRUNABLE } from '../shaping/project.js';
 import { HetznerError } from '../types.js';
 import type {
@@ -51,16 +44,24 @@ import type {
   ToolResult,
 } from '../types.js';
 import {
+  SERVER_BILLED_UNTIL_DELETED,
+  attachAction,
+  attachBilling,
   awaitAction,
+  billingFromPrices,
   connectionProperty,
+  noActionHint,
   readAction,
   readWaitMs,
   renderEnvelope,
   resolveConnection,
   runTool,
+  shapeResponse,
   toRecord,
   unsettledHint,
+  validationFrom,
   waitProperty,
+  type HetznerPrice,
 } from './shared.js';
 
 const OPERATION_ID = 'create_server';
@@ -219,11 +220,7 @@ type CreateArgs = z.infer<typeof ARGS>;
 function parseArgs(raw: Record<string, unknown>): CreateArgs {
   const parsed = ARGS.safeParse(raw);
   if (parsed.success) return parsed.data;
-
-  const detail = parsed.error.issues
-    .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-    .join('; ');
-  throw new HetznerError(`Invalid arguments: ${detail}`, 'validation');
+  throw validationFrom(parsed.error, 'arguments');
 }
 
 /**
@@ -338,16 +335,6 @@ async function billingFor(
 // ---------------------------------------------------------------------------
 
 /**
- * Stated on every successful create, priced or not.
- *
- * "It costs money" is the fact a summary of this response is most likely to drop,
- * and the one the user most needs kept. That a stopped server keeps billing is
- * said explicitly because the opposite is the near-universal assumption.
- */
-const BILLING_FACT =
-  'Hetzner bills this server from the moment it was created until it is deleted; powering it off does not stop the charge.';
-
-/**
  * Complements the one-time-secret note the envelope adds on its own (see
  * shaping/redact.ts). That note says the value is returned once and cannot be
  * read back; this says why there is a password at all, and how to not have one
@@ -367,7 +354,10 @@ interface HintParts {
 }
 
 function composeHint(parts: HintParts): string {
-  const notes: string[] = [BILLING_FACT];
+  // "It costs money" is the fact a summary of this response is most likely to
+  // drop, and the one the user most needs kept — so it leads, and it is the
+  // seam's sentence rather than a second wording of it.
+  const notes: string[] = [SERVER_BILLED_UNTIL_DELETED];
 
   if (!parts.priced) {
     notes.push(
@@ -376,7 +366,7 @@ function composeHint(parts: HintParts): string {
   }
   if (parts.hasPassword) notes.push(PASSWORD_FACT);
   if (parts.action === undefined) {
-    notes.push('Hetzner returned no Action for this creation, so nothing was awaited.');
+    notes.push(noActionHint(OPERATION_ID));
   } else if (!parts.settled) {
     notes.push(unsettledHint(parts.action));
   }
