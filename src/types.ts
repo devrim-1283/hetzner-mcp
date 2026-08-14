@@ -177,6 +177,16 @@ export interface Connection {
   allowDestructive: boolean;
   timeoutMs: number;
   credential: Credential;
+  /**
+   * Where this connection was defined. `doctor` exists to answer "why is it
+   * behaving like that", and with a layered configuration the answer is usually
+   * "not from the file you are looking at" — the aggregate `source` on the
+   * registry cannot say which connection came from where.
+   *
+   * Optional so that a test may build a Connection without asserting provenance
+   * it does not care about.
+   */
+  origin?: 'env' | 'file';
 }
 
 export interface ConnectionRegistry {
