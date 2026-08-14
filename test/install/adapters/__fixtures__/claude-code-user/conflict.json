@@ -1,0 +1,27 @@
+{
+  "numStartups": 42,
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/srv"
+      ],
+      "env": {
+        "FS_ROOT": "/srv"
+      }
+    },
+    "hetzner": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "hetzner-mcp@0.9.0"
+      ],
+      "env": {
+        "HETZNER_CONNECTION": "staging"
+      },
+      "disabled": true
+    }
+  }
+}

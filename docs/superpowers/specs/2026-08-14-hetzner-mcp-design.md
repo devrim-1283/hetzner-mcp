@@ -21,11 +21,11 @@ budget.
 
 Hetzner is not one API. Three surfaces are in scope:
 
-| Surface | Host | Auth | Scope of a credential | Spec |
-|---|---|---|---|---|
-| `cloud` | `api.hetzner.cloud/v1` | Bearer | one **project** | official, OpenAPI 3.1.2, 189 ops |
-| `hetzner` | `api.hetzner.com/v1` | Bearer | the **account** | official, OpenAPI 3.1.2, 32 ops |
-| `robot` | `robot-ws.your-server.de` | HTTP Basic | the **account** | none published, ~105 ops |
+| Surface   | Host                      | Auth       | Scope of a credential | Spec                             |
+| --------- | ------------------------- | ---------- | --------------------- | -------------------------------- |
+| `cloud`   | `api.hetzner.cloud/v1`    | Bearer     | one **project**       | official, OpenAPI 3.1.2, 189 ops |
+| `hetzner` | `api.hetzner.com/v1`      | Bearer     | the **account**       | official, OpenAPI 3.1.2, 32 ops  |
+| `robot`   | `robot-ws.your-server.de` | HTTP Basic | the **account**       | none published, ~105 ops         |
 
 Out of scope: the legacy DNS API at `dns.hetzner.com/api/v1`. Hetzner has moved
 DNS into the Cloud API — the cloud spec carries 25 zone and RRSet operations
@@ -102,12 +102,12 @@ a tool call.
 
 ### The env layer encodes the surface in the variable name
 
-| Env var | Produces |
-|---|---|
-| `HETZNER_TOKEN` | `default`, surface `cloud` |
-| `HETZNER_TOKEN_<NAME>` | `<name>`, surface `cloud` |
-| `HETZNER_ACCOUNT_TOKEN[_<NAME>]` | surface `hetzner` |
-| `HETZNER_ROBOT_USER_<NAME>` + `HETZNER_ROBOT_PASSWORD_<NAME>` | surface `robot` |
+| Env var                                                       | Produces                   |
+| ------------------------------------------------------------- | -------------------------- |
+| `HETZNER_TOKEN`                                               | `default`, surface `cloud` |
+| `HETZNER_TOKEN_<NAME>`                                        | `<name>`, surface `cloud`  |
+| `HETZNER_ACCOUNT_TOKEN[_<NAME>]`                              | surface `hetzner`          |
+| `HETZNER_ROBOT_USER_<NAME>` + `HETZNER_ROBOT_PASSWORD_<NAME>` | surface `robot`            |
 
 The surface lives in the variable's name rather than in a separate
 `HETZNER_SURFACE_<NAME>` variable, because a separate variable can be forgotten,
@@ -267,11 +267,11 @@ real editor config is the worst failure this product can have.
 
 ## Decisions taken, and what was rejected
 
-| Decision | Rejected alternative | Why |
-|---|---|---|
-| Surface-typed connections | One merged virtual API | A cloud `server` is a VM; a robot `server` is leased hardware. Merging makes "reboot the server" ambiguous in a way that cannot be recovered from. |
-| Surface-typed connections | One package per surface | Cross-surface search becomes impossible, and the shared code still has to be shared. |
-| Copy-and-adapt the installer | Extract a shared package | Owner's call. Mitigated by keeping the copy structurally identical so it stays diffable and cheap to extract later. |
-| Costly operations ungated | A second `ALLOW_COSTLY` flag | Owner's call, taken with the consequence stated. Cost is made visible instead. |
-| Legacy DNS API dropped | Supporting it | Zones are in the Cloud API. A second way to do the same thing, with a third credential type. |
-| Base URL derived | Configurable | Hetzner has one instance per API. |
+| Decision                     | Rejected alternative         | Why                                                                                                                                                |
+| ---------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Surface-typed connections    | One merged virtual API       | A cloud `server` is a VM; a robot `server` is leased hardware. Merging makes "reboot the server" ambiguous in a way that cannot be recovered from. |
+| Surface-typed connections    | One package per surface      | Cross-surface search becomes impossible, and the shared code still has to be shared.                                                               |
+| Copy-and-adapt the installer | Extract a shared package     | Owner's call. Mitigated by keeping the copy structurally identical so it stays diffable and cheap to extract later.                                |
+| Costly operations ungated    | A second `ALLOW_COSTLY` flag | Owner's call, taken with the consequence stated. Cost is made visible instead.                                                                     |
+| Legacy DNS API dropped       | Supporting it                | Zones are in the Cloud API. A second way to do the same thing, with a third credential type.                                                       |
+| Base URL derived             | Configurable                 | Hetzner has one instance per API.                                                                                                                  |

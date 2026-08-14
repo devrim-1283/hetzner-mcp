@@ -301,7 +301,7 @@ describe('credential resolution', () => {
     const credential = registry.connections.get('acme-ops')?.credential;
 
     expect(credential?.kind).toBe('bearer');
-    await expect(credential?.resolve()).resolves.toEqual({ token: TOKEN });
+    await expect(credential?.resolve()).resolves.toEqual({ kind: 'bearer', token: TOKEN });
   });
 
   it('reads an account token from the account variable, not the cloud one', async () => {
@@ -309,6 +309,7 @@ describe('credential resolution', () => {
     const registry = await resolve(t, { HETZNER_ACCOUNT_TOKEN_STORAGE: TOKEN });
 
     await expect(registry.connections.get('storage')?.credential.resolve()).resolves.toEqual({
+      kind: 'bearer',
       token: TOKEN,
     });
   });
@@ -355,8 +356,35 @@ describe('credential resolution', () => {
 
     expect(credential?.kind).toBe('basic');
     await expect(credential?.resolve()).resolves.toEqual({
+      kind: 'basic',
       user: ROBOT_USER,
       password: ROBOT_PASSWORD,
+    });
+  });
+
+  it('tags every resolved credential with its surface`s own auth style', async () => {
+    // The tag comes from SURFACE_AUTH, not from which fields happened to come
+    // back. Asserting that the declared `Credential.kind` and the resolved
+    // `ResolvedCredential.kind` agree for all three surfaces is what stops the
+    // two from ever being derived independently.
+    const t = tree();
+    const registry = await resolve(t, {
+      HETZNER_TOKEN: TOKEN,
+      HETZNER_ACCOUNT_TOKEN: TOKEN,
+      HETZNER_ROBOT_USER: ROBOT_USER,
+      HETZNER_ROBOT_PASSWORD: ROBOT_PASSWORD,
+    });
+
+    const tags: Record<string, [string, string]> = {};
+    for (const [name, connection] of registry.connections) {
+      const resolved = await connection.credential.resolve();
+      tags[name] = [connection.credential.kind, resolved.kind];
+    }
+
+    expect(tags).toEqual({
+      default: ['bearer', 'bearer'],
+      account: ['bearer', 'bearer'],
+      robot: ['basic', 'basic'],
     });
   });
 
@@ -372,6 +400,7 @@ describe('credential resolution', () => {
     const registry = await resolve(t, { RB_USER: ROBOT_USER, RB_PASS: ROBOT_PASSWORD });
 
     await expect(registry.connections.get('metal')?.credential.resolve()).resolves.toEqual({
+      kind: 'basic',
       user: ROBOT_USER,
       password: ROBOT_PASSWORD,
     });
@@ -403,7 +432,7 @@ describe('credential resolution', () => {
     // be re-derived — not even when the source disappears.
     delete env['HETZNER_TOKEN'];
 
-    await expect(credential?.resolve()).resolves.toEqual({ token: TOKEN });
+    await expect(credential?.resolve()).resolves.toEqual({ kind: 'bearer', token: TOKEN });
   });
 
   it('explains a missing token in terms of the variable that would have worked', async () => {
@@ -456,6 +485,7 @@ describe('credential commands never reach a shell', () => {
     ]);
 
     await expect(registry.connections.get('prod')?.credential.resolve()).resolves.toEqual({
+      kind: 'bearer',
       token: literal,
     });
   });
@@ -481,6 +511,7 @@ describe('credential commands never reach a shell', () => {
     );
 
     await expect(registry.connections.get('prod')?.credential.resolve()).resolves.toEqual({
+      kind: 'bearer',
       token: 'no-hetzner-vars',
     });
   });
@@ -519,6 +550,7 @@ describe('credential commands never reach a shell', () => {
     ]);
 
     await expect(registry.connections.get('prod')?.credential.resolve()).resolves.toEqual({
+      kind: 'bearer',
       token: TOKEN,
     });
   });
@@ -543,6 +575,7 @@ describe('credential commands never reach a shell', () => {
     const registry = await resolve(t, { ...OS_ENV, RB_USER: ROBOT_USER });
 
     await expect(registry.connections.get('metal')?.credential.resolve()).resolves.toEqual({
+      kind: 'basic',
       user: ROBOT_USER,
       password: ROBOT_PASSWORD,
     });
@@ -802,7 +835,7 @@ describe('env and file together', () => {
     expect(prod?.label).toBeUndefined();
     expect(prod?.readOnly).toBe(false);
     expect(prod?.timeoutMs).toBe(30_000);
-    await expect(prod?.credential.resolve()).resolves.toEqual({ token: TOKEN });
+    await expect(prod?.credential.resolve()).resolves.toEqual({ kind: 'bearer', token: TOKEN });
 
     expect(registry.shadowed).toEqual(['prod']);
     expect(registry.source).toBe('env+file');

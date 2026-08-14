@@ -22,7 +22,13 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { HetznerError, SURFACE_AUTH, type Credential, type Surface } from '../types.js';
+import {
+  HetznerError,
+  SURFACE_AUTH,
+  type Credential,
+  type ResolvedCredential,
+  type Surface,
+} from '../types.js';
 import { registerSecret } from '../shaping/redact.js';
 import {
   ACCOUNT_TOKEN_ENV,
@@ -118,8 +124,6 @@ export interface CredentialOptions {
   platform?: NodeJS.Platform;
 }
 
-export type ResolvedCredential = { token: string } | { user: string; password: string };
-
 /**
  * Builds the memoised `Connection.credential`. The cache holds the promise, not
  * the value, so a fan-out across connections does not spawn one `op read` per
@@ -154,7 +158,15 @@ async function resolveCredential(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): Promise<ResolvedCredential> {
-  if (SURFACE_AUTH[spec.surface] === 'basic') {
+  // ONE read of the surface's auth style decides both which reader runs and how
+  // the result is tagged, so the tag can never describe a different credential
+  // than the one that was actually fetched. Deriving it from which fields came
+  // back — `'user' in resolved ? 'basic' : 'bearer'` — would let a half-resolved
+  // credential silently name itself the wrong kind, and the HTTP layer would
+  // then build a header for an authentication scheme nobody chose.
+  const kind = SURFACE_AUTH[spec.surface];
+
+  if (kind === 'basic') {
     const { user, password, source } = await readBasic(spec, env, platform);
     const cleanUser = checkSecret(user, spec, `${source} (user)`, 'user');
     const cleanPassword = checkSecret(password, spec, `${source} (password)`, 'password');
@@ -165,13 +177,13 @@ async function resolveCredential(
     // never appears in it verbatim.
     registerCredentialSecret(Buffer.from(`${cleanUser}:${cleanPassword}`).toString('base64'));
 
-    return { user: cleanUser, password: cleanPassword };
+    return { kind, user: cleanUser, password: cleanPassword };
   }
 
   const { value, source } = await readToken(spec, env, platform);
   const token = checkSecret(value, spec, source, 'token');
   registerCredentialSecret(token);
-  return { token };
+  return { kind, token };
 }
 
 function checkSecret(raw: string, spec: CredentialSpec, source: string, what: string): string {
