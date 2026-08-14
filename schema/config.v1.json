@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/devrim-1283/hetzner-mcp/main/schema/config.v1.json",
+  "title": "hetzner-mcp connection config (v1)",
+  "$comment": "HAND-WRITTEN MIRROR of connectionSchema/configFileSchema in src/config/schema.ts. zod-to-json-schema is deliberately not a dependency, so the two are kept in sync by a parity test that feeds the same fixtures to both: any property, default, bound or pattern changed in schema.ts must be changed here in the same commit. This file is published in the npm package (see package.json files[]) and is what a user's $schema key points at.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "connections"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Points at this file so editors can validate and autocomplete the config."
+    },
+    "version": {
+      "const": 1,
+      "description": "Config format version. Always 1."
+    },
+    "defaultConnection": {
+      "$ref": "#/$defs/connectionName",
+      "description": "Connection used when a tool call does not name one. $HETZNER_CONNECTION overrides it. With exactly one connection it is unnecessary; with several and none designated, tools require an explicit connection."
+    },
+    "extends": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to a base config file, resolved relative to this file ('~/' is expanded). Exactly one level: the base file may not itself extend another. A name defined in both files replaces the base entry whole — there is no field-level merge."
+    },
+    "connections": {
+      "type": "object",
+      "description": "A connection is (surface, credential). A Cloud token is created inside one project and cannot see any other, so a second project is a second connection; the surface extends the same mechanism to the account-scoped API and to Robot.",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/connectionName" },
+      "additionalProperties": { "$ref": "#/$defs/connection" }
+    }
+  },
+  "$defs": {
+    "connectionName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,30}$",
+      "description": "Lowercase letters, digits and dashes, starting with a letter or digit, 31 characters max. The name maps to env vars by uppercasing and replacing - with _: 'acme-ops' <-> HETZNER_TOKEN_ACME_OPS."
+    },
+    "envVarName": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Argv array executed WITHOUT a shell; trimmed stdout is the secret. No string splitting, no interpolation, no glob expansion. Example: [\"op\", \"read\", \"op://Infra/hetzner/credential\"]."
+    },
+    "keychainRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "account"],
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "account": { "type": "string", "minLength": 1 }
+      },
+      "description": "Platform credential store: macOS `security find-generic-password`, Linux `secret-tool lookup`, Windows user-scoped DPAPI ciphertext at %LOCALAPPDATA%\\hetzner-mcp\\credentials.dat (not Credential Manager — no first-party CLI returns a generic credential's secret)."
+    },
+    "connection": {
+      "type": "object",
+      "$comment": "There is no 'token', 'user' or 'password' property, and additionalProperties is false, so a literal credential here is a schema validation error rather than a discouraged option. There is no 'baseUrl' either: it is derived from 'surface'. Both are enforcement, not documentation.",
+      "description": "hetzner-mcp never stores credentials in config files. Point at a credential with tokenEnv/tokenCommand/tokenKeychain (cloud, hetzner) or userEnv+passwordEnv/userEnv+passwordCommand/credentialKeychain (robot), or set none of them and the conventional environment variables for the surface are read.",
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "enum": ["cloud", "hetzner", "robot"],
+          "default": "cloud",
+          "description": "Which Hetzner API this connection speaks to. cloud = api.hetzner.cloud/v1, bearer, scoped to ONE project. hetzner = api.hetzner.com/v1, bearer, account-scoped. robot = robot-ws.your-server.de, HTTP Basic, dedicated servers. The base URL is derived from this and is never configurable: Hetzner runs exactly one instance of each API, so a user-supplied URL could only repeat what is already known, or be wrong."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Human label shown in doctor output and error messages."
+        },
+        "tokenEnv": {
+          "$ref": "#/$defs/envVarName",
+          "description": "cloud/hetzner only. Name of the environment variable holding the API token."
+        },
+        "tokenCommand": {
+          "$ref": "#/$defs/command",
+          "description": "cloud/hetzner only. Argv array whose stdout is the API token."
+        },
+        "tokenKeychain": {
+          "$ref": "#/$defs/keychainRef",
+          "description": "cloud/hetzner only. Credential store item whose secret is the API token."
+        },
+        "userEnv": {
+          "$ref": "#/$defs/envVarName",
+          "description": "robot only. Name of the environment variable holding the Robot web-service user (looks like '#123456+ws'). Set together with passwordEnv or passwordCommand."
+        },
+        "passwordEnv": {
+          "$ref": "#/$defs/envVarName",
+          "description": "robot only. Name of the environment variable holding the Robot web-service password."
+        },
+        "passwordCommand": {
+          "$ref": "#/$defs/command",
+          "description": "robot only. Argv array whose stdout is the Robot web-service password."
+        },
+        "credentialKeychain": {
+          "$ref": "#/$defs/keychainRef",
+          "description": "robot only, and it carries BOTH halves: the item's 'account' is the Robot web-service user and its secret is the password. One item per login is what keeps the user — half a credential — out of this file."
+        },
+        "readOnly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Refuse every write and destructive operation on this connection regardless of token scope. $HETZNER_READ_ONLY=true forces this on for all connections; it can only tighten, never loosen."
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "Per-connection override of $HETZNER_ALLOW_DESTRUCTIVE, ANDed with it. It can only narrow: true here grants nothing on a server where the global flag is off, while false keeps this connection protected on a server where it is on."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 120000,
+          "default": 30000,
+          "description": "Per-request timeout in milliseconds."
+        }
+      },
+      "dependentRequired": {
+        "passwordEnv": ["userEnv"],
+        "passwordCommand": ["userEnv"]
+      },
+      "allOf": [
+        {
+          "$comment": "At most one credential source: two sources means two answers to 'where is the credential' and no rule for which wins.",
+          "not": { "required": ["tokenEnv", "tokenCommand"] }
+        },
+        { "not": { "required": ["tokenEnv", "tokenKeychain"] } },
+        { "not": { "required": ["tokenCommand", "tokenKeychain"] } },
+        { "not": { "required": ["passwordEnv", "passwordCommand"] } },
+        {
+          "$comment": "credentialKeychain already carries both halves.",
+          "not": { "required": ["credentialKeychain", "userEnv"] }
+        },
+        { "not": { "required": ["credentialKeychain", "passwordEnv"] } },
+        { "not": { "required": ["credentialKeychain", "passwordCommand"] } },
+        {
+          "$comment": "A source from the wrong surface is not a typo the user can see: tokenEnv on a robot connection reads as sensible right up to the 401.",
+          "if": { "properties": { "surface": { "const": "robot" } }, "required": ["surface"] },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["tokenEnv"] },
+                { "required": ["tokenCommand"] },
+                { "required": ["tokenKeychain"] }
+              ]
+            }
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                { "required": ["userEnv"] },
+                { "required": ["passwordEnv"] },
+                { "required": ["passwordCommand"] },
+                { "required": ["credentialKeychain"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "examples": [
+    {
+      "$schema": "https://raw.githubusercontent.com/devrim-1283/hetzner-mcp/main/schema/config.v1.json",
+      "version": 1,
+      "defaultConnection": "prod",
+      "connections": {
+        "prod": {
+          "surface": "cloud",
+          "tokenEnv": "HZ_PROD"
+        },
+        "staging": {
+          "label": "staging project, read-only",
+          "readOnly": true,
+          "tokenCommand": ["op", "read", "op://Infra/hetzner-staging/credential"]
+        },
+        "storage": {
+          "surface": "hetzner",
+          "tokenEnv": "HZ_ACCOUNT"
+        },
+        "metal": {
+          "surface": "robot",
+          "userEnv": "RB_USER",
+          "passwordEnv": "RB_PASS"
+        },
+        "metal-eu": {
+          "surface": "robot",
+          "credentialKeychain": { "service": "hetzner-mcp", "account": "#123456+ws" }
+        }
+      }
+    }
+  ]
+}
