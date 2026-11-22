@@ -538,7 +538,8 @@ describe('zones', () => {
     expect(urlOf(0)).toBe(`${BASE}/zones`);
     // Case folded and the trailing dot dropped: both spell the same zone, and
     // Hetzner stores the lower-case dotless form.
-    expect(bodyOf(0)).toEqual({ name: 'example.com', ttl: 3600 });
+    // mode is required by Hetzner; this tool only creates primary zones.
+    expect(bodyOf(0)).toEqual({ name: 'example.com', mode: 'primary', ttl: 3600 });
   });
 
   it('refuses a zone reference that is neither an id nor a domain name', async () => {
