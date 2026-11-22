@@ -633,7 +633,9 @@ async function runZoneOperation(
         {
           method: 'POST',
           path: '/zones',
-          body: { name: zone, ...(ttl === undefined ? {} : { ttl }) },
+          // Hetzner requires `mode`; secondary zones need primary_nameservers,
+          // which this tool deliberately does not accept, so it is always primary.
+          body: { name: zone, mode: 'primary', ...(ttl === undefined ? {} : { ttl }) },
         },
         extra,
       );
